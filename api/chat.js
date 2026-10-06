@@ -1,7 +1,7 @@
 // Função da Vercel: recebe as mensagens do site e chama o Google Gemini.
 // A chave fica na Vercel (variável GEMINI_API_KEY), nunca no navegador.
 
-const MODEL = process.env.GEMINI_MODEL || "gemini-3.5-flash-lite";
+const MODEL = process.env.GEMINI_MODEL || "gemini-2.5-flash";
 const USE_SEARCH = process.env.USE_SEARCH !== "0";
 
 function systemPrompt(voice) {
