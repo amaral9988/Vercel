@@ -35,7 +35,7 @@ a,small{color:var(--muted);font-size:.9rem}
 <button class="btn" id="go" type="button">Ligar</button>
 <button class="btn" id="hang" type="button" hidden>Desligar</button>
 <a href="/">Voltar ao chat</a>
-<small>ligação v5 · memória + internet</small>
+<small>ligação v4 · com memória</small>
 <script type="module">
 const MODEL = "gemini-3.1-flash-live-preview";
 const VOICE = "Charon"; // voz masculina. Outras: Puck, Orus, Fenrir
@@ -46,9 +46,7 @@ const PROMPT =
 "Você está numa ligação de voz: fale como numa conversa de telefone, com frases curtas, naturais, " +
 "tom caloroso e descontraído. Sem listas, símbolos, markdown ou links na fala. " +
 "Vá direto ao ponto, faça no máximo uma pergunta por vez e seja honesto: se não souber, diga. " +
-"Você é uma inteligência artificial e não finge ser humano. Responda em português do Brasil. " +
-"Para notícias, preços, clima, resultados de jogos ou qualquer informação atual, pesquise na internet antes de responder. " +
-"Hoje é " + new Date().toLocaleDateString("pt-BR", { dateStyle: "full", timeZone: "America/Sao_Paulo" }) + ".";
+"Você é uma inteligência artificial e não finge ser humano. Responda em português do Brasil.";
 
 const $ = (id) => document.getElementById(id);
 const orb = $("orb"), st = $("st"), tx = $("tx"), err = $("err"), go = $("go"), hang = $("hang");
@@ -157,7 +155,6 @@ async function start() {
       model: MODEL,
       config: {
         responseModalities: ["AUDIO"], systemInstruction: PROMPT + memTxt,
-        tools: [{ googleSearch: {} }], // internet em tempo real
         speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: VOICE } } },
         inputAudioTranscription: {}, outputAudioTranscription: {},
         realtimeInputConfig: { automaticActivityDetection: { startOfSpeechSensitivity: "START_SENSITIVITY_LOW", endOfSpeechSensitivity: "END_SENSITIVITY_LOW", prefixPaddingMs: 300, silenceDurationMs: 1000 } },
