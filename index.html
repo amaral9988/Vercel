@@ -178,11 +178,11 @@ textarea::placeholder{color:var(--muted)}
 <script>
 /* ===== CONFIGURAÇÃO =====
    Para a IA responder de verdade, aponte para um endpoint seu
-   (ex.: uma Netlify Function em "/.netlify/functions/chat").
+   (ex.: uma função em "/api/chat").
    NUNCA coloque a chave da API aqui no navegador.
    O endpoint deve receber { messages: [{role, content}] } e devolver { reply: "texto" }.
    Deixe vazio para rodar em modo demonstração. */
-const API_URL = "/.netlify/functions/chat";
+const API_URL = "/api/chat";
 
 const chat = document.getElementById("chat");
 const input = document.getElementById("input");
@@ -412,7 +412,7 @@ function browserSpeak(text){
 async function cloudSpeak(text, id){
   const t = recorte(paraFala(text), 700);
   if(!t) return;
-  const r = await fetch("/.netlify/functions/tts", {
+  const r = await fetch("/api/tts", {
     method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({text:t})
   });
   if(!r.ok) throw new Error("tts");
@@ -500,11 +500,7 @@ if(!SR){ micBtn.hidden = true; } else {
   micBtn.addEventListener("click", () => { if(listening){ rec.stop(); } else { listen(); } });
 }
 
-ligarBtn.addEventListener("click", () => {
-  if(!SR){ add("bot","Seu navegador não suporta chamada por voz. Use o Chrome no Android ou no computador.","err"); return; }
-  callOn = true; callEl.hidden = false; keepAwake(true);
-  setCall("listening", ""); listen();
-});
+ligarBtn.addEventListener("click", () => { location.href = "/ligar.html"; });
 document.getElementById("hang").addEventListener("click", () => hangUp());
 orb.addEventListener("click", () => {
   if(orb.classList.contains("speaking")) stopAllSpeech();
@@ -512,5 +508,5 @@ orb.addEventListener("click", () => {
 });
 document.getElementById("novo").addEventListener("click", () => location.reload());
 </script>
-<script type="module" src="/live.js"></script></body>
+</body>
 </html>
