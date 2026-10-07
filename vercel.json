@@ -3,3 +3,4 @@
     { "source": "/.netlify/functions/:name", "destination": "/api/:name" }
   ]
 }
+
