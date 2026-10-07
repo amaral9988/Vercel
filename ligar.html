@@ -1,0 +1,165 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0b0d12">
+<title>Ligar para o Amaral</title>
+<style>
+:root{--muted:#8d93a8;--accent:#8f8bff}
+*{box-sizing:border-box;margin:0}
+html,body{height:100%}
+body{background:radial-gradient(120% 80% at 50% 30%,#171a2b,#0b0d12);color:#eef0f6;font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:20px;text-align:center;padding:calc(24px + env(safe-area-inset-top,0px)) 24px calc(24px + env(safe-area-inset-bottom,0px))}
+h1{font-size:1.3rem}
+.orb{width:min(52vw,200px);aspect-ratio:1;border-radius:50%;border:0;cursor:pointer;background:radial-gradient(circle at 35% 30%,#b9b6ff,#8f8bff 45%,#4fb8ff);box-shadow:0 0 60px rgba(143,139,255,.45)}
+.orb.listening{animation:b 2.4s ease-in-out infinite}
+.orb.thinking{animation:b .9s ease-in-out infinite;opacity:.75}
+.orb.speaking{animation:b 1.1s ease-in-out infinite;box-shadow:0 0 90px rgba(95,208,255,.6)}
+@keyframes b{50%{transform:scale(1.07)}}
+#st{color:var(--muted);min-height:1.5em}
+#tx{min-height:3.4em;max-width:30em;overflow-wrap:anywhere}
+#err{color:#ffb4c0;max-width:30em;overflow-wrap:anywhere}
+.btn{border:0;border-radius:999px;font:inherit;font-weight:600;padding:14px 34px;min-height:48px;cursor:pointer}
+#go{background:var(--accent);color:#0b0d12}
+#hang{background:#ff5d73;color:#fff}
+[hidden]{display:none!important}
+a,small{color:var(--muted);font-size:.9rem}
+</style>
+</head>
+<body>
+<h1>Amaral</h1>
+<button class="orb" id="orb" type="button" aria-label="Tocar para interromper"></button>
+<div id="st">Toque em Ligar</div>
+<div id="tx"></div>
+<div id="err"></div>
+<button class="btn" id="go" type="button">Ligar</button>
+<button class="btn" id="hang" type="button" hidden>Desligar</button>
+<a href="/">Voltar ao chat</a>
+<small>ligação v3</small>
+
+<script type="module">
+const MODEL = "gemini-3.1-flash-live-preview";
+const VOICE = "Charon"; // voz masculina. Outras: Puck, Orus, Fenrir
+const GATE_NORMAL = 0.015, GATE_FALANDO = 0.05; // sobe = menos sensível a barulho
+const PROMPT =
+  "Você é o Amaral (AmaraL IA), um assistente brasileiro homem, que fala de si sempre no masculino. " +
+  "Você está numa ligação de voz: fale como numa conversa de telefone, com frases curtas, naturais, " +
+  "tom caloroso e descontraído. Sem listas, símbolos, markdown ou links na fala. " +
+  "Vá direto ao ponto, faça no máximo uma pergunta por vez e seja honesto: se não souber, diga. " +
+  "Você é uma inteligência artificial e não finge ser humano. Responda em português do Brasil.";
+
+const $ = (id) => document.getElementById(id);
+const orb = $("orb"), st = $("st"), tx = $("tx"), err = $("err"), go = $("go"), hang = $("hang");
+let GoogleGenAI, session = null, stream = null, inCtx = null, outCtx = null, node = null, wl = null;
+let active = false, nextT = 0, userTurn = false;
+const srcs = new Set();
+
+const setState = (s, t) => {
+  orb.className = "orb " + s;
+  st.textContent = { listening: "Ouvindo…", thinking: "Conectando…", speaking: "Falando. Fale para interromper" }[s] || "";
+  if (t !== undefined) tx.textContent = t;
+};
+const toB64 = (buf) => { const u = new Uint8Array(buf); let s = ""; for (let i = 0; i < u.length; i += 0x8000) s += String.fromCharCode.apply(null, u.subarray(i, i + 0x8000)); return btoa(s); };
+const stopPlay = () => { srcs.forEach((s) => { s.onended = null; try { s.stop(); } catch (_) {} }); srcs.clear(); nextT = 0; };
+
+function play(b64) {
+  const bin = atob(b64), n = bin.length >> 1, dv = new DataView(new ArrayBuffer(bin.length));
+  for (let i = 0; i < bin.length; i++) dv.setUint8(i, bin.charCodeAt(i));
+  const f = new Float32Array(n);
+  for (let i = 0; i < n; i++) f[i] = dv.getInt16(i * 2, true) / 32768;
+  const buf = outCtx.createBuffer(1, n, 24000); buf.copyToChannel(f, 0);
+  const s = outCtx.createBufferSource(); s.buffer = buf; s.connect(outCtx.destination);
+  const t = Math.max(outCtx.currentTime + 0.03, nextT); s.start(t); nextT = t + buf.duration;
+  srcs.add(s);
+  s.onended = () => { srcs.delete(s); if (!srcs.size && active) setState("listening"); };
+}
+
+function onMsg(m) {
+  const sc = m.serverContent; if (!sc) return;
+  if (sc.interrupted) { stopPlay(); setState("listening"); }
+  if (sc.inputTranscription?.text) { if (!userTurn) { tx.textContent = ""; userTurn = true; } tx.textContent = (tx.textContent + sc.inputTranscription.text).slice(-180); }
+  if (sc.outputTranscription?.text) { if (userTurn) { tx.textContent = ""; userTurn = false; } tx.textContent = (tx.textContent + sc.outputTranscription.text).slice(-180); }
+  for (const p of sc.modelTurn?.parts || []) if (p.inlineData?.data) { setState("speaking"); play(p.inlineData.data); }
+}
+
+function stop(msg) {
+  active = false; stopPlay();
+  try { session?.close(); } catch (_) {} session = null;
+  try { node?.disconnect(); } catch (_) {} node = null;
+  stream?.getTracks().forEach((t) => t.stop()); stream = null;
+  inCtx?.close().catch(() => {}); inCtx = null;
+  outCtx?.close().catch(() => {}); outCtx = null;
+  wl?.release().catch(() => {}); wl = null;
+  orb.className = "orb"; st.textContent = "Toque em Ligar";
+  go.hidden = false; hang.hidden = true;
+  if (msg) err.textContent = msg;
+}
+
+async function start() {
+  if (active) return;
+  active = true; err.textContent = ""; go.hidden = true; hang.hidden = false;
+  setState("thinking", "");
+  try {
+    outCtx = new AudioContext({ sampleRate: 24000 }); inCtx = new AudioContext();
+    await outCtx.resume(); await inCtx.resume();
+    try { wl = await navigator.wakeLock.request("screen"); } catch (_) {}
+    if (!GoogleGenAI) {
+      try { ({ GoogleGenAI } = await import("https://esm.run/@google/genai")); }
+      catch (_) { ({ GoogleGenAI } = await import("https://esm.sh/@google/genai")); }
+    }
+    stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true, channelCount: 1 } });
+    const r = await fetch("/api/live-token", { method: "POST" });
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok || !d.token) throw new Error(d.error || "Não consegui iniciar a ligação (token).");
+    const ai = new GoogleGenAI({ apiKey: d.token, httpOptions: { apiVersion: "v1alpha" } });
+    session = await ai.live.connect({
+      model: MODEL,
+      config: {
+        responseModalities: ["AUDIO"], systemInstruction: PROMPT,
+        speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: VOICE } } },
+        inputAudioTranscription: {}, outputAudioTranscription: {},
+        realtimeInputConfig: { automaticActivityDetection: { startOfSpeechSensitivity: "START_SENSITIVITY_LOW", endOfSpeechSensitivity: "END_SENSITIVITY_LOW", prefixPaddingMs: 300, silenceDurationMs: 1000 } },
+      },
+      callbacks: {
+        onmessage: onMsg,
+        onerror: (e) => active && stop("Erro na conexão de voz: " + (e?.message || "desconhecido")),
+        onclose: (e) => active && stop("A ligação caiu" + (e?.reason ? ": " + e.reason : ".") + " Toque em Ligar para tentar de novo."),
+      },
+    });
+    const code = 'class P extends AudioWorkletProcessor{process(i){const c=i[0][0];if(c)this.port.postMessage(c.slice(0));return true;}}registerProcessor("p",P);';
+    await inCtx.audioWorklet.addModule(URL.createObjectURL(new Blob([code], { type: "text/javascript" })));
+    const src = inCtx.createMediaStreamSource(stream);
+    node = new AudioWorkletNode(inCtx, "p");
+    const mute = inCtx.createGain(); mute.gain.value = 0;
+    src.connect(node); node.connect(mute); mute.connect(inCtx.destination);
+    let acc = [], len = 0, holdUntil = 0;
+    node.port.onmessage = (e) => {
+      if (!session) return;
+      let chunk = e.data, soma = 0;
+      for (let i = 0; i < chunk.length; i++) soma += chunk[i] * chunk[i];
+      const rms = Math.sqrt(soma / chunk.length), agora = performance.now();
+      if (rms > (srcs.size ? GATE_FALANDO : GATE_NORMAL)) holdUntil = agora + 500;
+      if (agora > holdUntil) chunk = new Float32Array(chunk.length);
+      acc.push(chunk); len += chunk.length;
+      if (len < 2048) return;
+      const all = new Float32Array(len); let o = 0;
+      for (const a of acc) { all.set(a, o); o += a.length; }
+      acc = []; len = 0;
+      const ratio = inCtx.sampleRate / 16000, n = Math.floor(all.length / ratio), out = new Int16Array(n);
+      for (let i = 0; i < n; i++) { const s = Math.max(-1, Math.min(1, all[Math.floor(i * ratio)])); out[i] = s < 0 ? s * 32768 : s * 32767; }
+      session.sendRealtimeInput({ audio: { data: toB64(out.buffer), mimeType: "audio/pcm;rate=16000" } });
+    };
+    setState("listening", "");
+    try { session.sendRealtimeInput({ text: "Cumprimente com um olá curto e pergunte como pode ajudar." }); } catch (_) {}
+  } catch (e) {
+    const negou = e && (e.name === "NotAllowedError" || e.name === "SecurityError");
+    stop(negou ? "Permita o uso do microfone no navegador." : "Não consegui ligar: " + (e.message || "erro desconhecido"));
+  }
+}
+
+go.addEventListener("click", start);
+hang.addEventListener("click", () => stop());
+orb.addEventListener("click", () => { if (active) { stopPlay(); setState("listening"); } });
+</script>
+</body>
+</html>
