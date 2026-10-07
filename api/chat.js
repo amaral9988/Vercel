@@ -1,13 +1,13 @@
-// Função da Vercel: recebe as mensagens do site e chama o Google Gemini.
-// A chave fica na Vercel (variável GEMINI_API_KEY), nunca no navegador.
+// Netlify Function: recebe as mensagens do site e chama a API do Google Gemini.
+// A chave fica no Netlify (variável GEMINI_API_KEY), nunca no navegador.
 
-const MODELS = (process.env.GEMINI_MODEL ? [process.env.GEMINI_MODEL] : []).concat(["gemini-3.8-flash", "gemini-3.5-flash-lite"]);
-const USE_SEARCH = process.env.USE_SEARCH !== "0";
+const MODEL = process.env.GEMINI_MODEL || "gemini-3.5-flash-lite";
+const USE_SEARCH = process.env.USE_SEARCH !== "0"; // coloque USE_SEARCH=0 no Netlify para desligar a busca
 
 function systemPrompt(voice) {
   const hoje = new Date().toLocaleDateString("pt-BR", { timeZone: "America/Sao_Paulo", dateStyle: "full" });
   return (
-    "Você é o AmaraL IA, um assistente brasileiro que se apresenta no masculino (o AmaraL), criado para conversar e ajudar de verdade. " +
+    "Você é o Loko IA , um assistente brasileiro que se apresenta no masculino (o Loko), criado para conversar e ajudar de verdade. " +
     "Fale de si sempre no masculino (ex.: 'obrigado', 'fico feliz', 'estou pronto'). Seu jeito: " +
     "curioso e caloroso, gosta de entender o problema da pessoa e a trata como um adulto capaz; " +
     "honesto antes de agradável: não bajula e não concorda só para agradar, e se uma ideia tem um problema, " +
@@ -46,9 +46,13 @@ function systemPrompt(voice) {
   );
 }
 
-const json = (statusCode, body) => ({ statusCode, body: JSON.stringify(body) });
+const json = (statusCode, body) => ({
+  statusCode,
+  headers: { "Content-Type": "application/json" },
+  body: JSON.stringify(body),
+});
 
-async function callGemini(apiKey, contents, level, voice, model) {
+async function callGemini(apiKey, contents, level, voice) {
   const body = {
     system_instruction: { parts: [{ text: systemPrompt(voice) }] },
     contents,
@@ -56,9 +60,9 @@ async function callGemini(apiKey, contents, level, voice, model) {
   };
   if (level >= 1) {
     body.tools = [{ google_search: {} }];
-    if (level >= 2) body.tools.push({ url_context: {} });
+    if (level >= 2) body.tools.push({ url_context: {} }); // leitura de links
   }
-  return fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`, {
+  return fetch(`https://generativelanguage.googleapis.com/v1beta/models/${MODEL}:generateContent`, {
     method: "POST",
     headers: { "Content-Type": "application/json", "x-goog-api-key": apiKey },
     body: JSON.stringify(body),
@@ -67,8 +71,9 @@ async function callGemini(apiKey, contents, level, voice, model) {
 
 async function handler(event) {
   if (event.httpMethod !== "POST") return json(405, { reply: "Método não permitido." });
+
   const apiKey = process.env.GEMINI_API_KEY;
-  if (!apiKey) return json(500, { reply: "Chave da API não configurada na Vercel (GEMINI_API_KEY)." });
+  if (!apiKey) return json(500, { reply: "Chave da API não configurada no Vercel (GEMINI_API_KEY)." });
 
   let messages, voice = false;
   try {
@@ -78,28 +83,29 @@ async function handler(event) {
   } catch {
     return json(400, { reply: "Requisição inválida." });
   }
-  if (!Array.isArray(messages) || messages.length === 0) return json(400, { reply: "Nenhuma mensagem enviada." });
+  if (!Array.isArray(messages) || messages.length === 0) {
+    return json(400, { reply: "Nenhuma mensagem enviada." });
+  }
 
   const contents = messages
     .filter((m) => (m.role === "user" || m.role === "assistant") && typeof m.content === "string")
     .slice(-20)
-    .map((m) => ({ role: m.role === "assistant" ? "model" : "user", parts: [{ text: m.content.slice(0, 4000) }] }));
+    .map((m) => ({
+      role: m.role === "assistant" ? "model" : "user",
+      parts: [{ text: m.content.slice(0, 4000) }],
+    }));
 
   try {
+    // Tenta busca + leitura de links; se falhar, só busca; se falhar, sem ferramentas
     let res;
-    const niveis = USE_SEARCH ? (voice ? [1, 0] : [2, 1, 0]) : [0];
-    outer: for (const model of MODELS) {
-      for (let tentativa = 0; tentativa < 2; tentativa++) {
-        for (const level of niveis) {
-          res = await callGemini(apiKey, contents, level, voice, model);
-          if (res.ok) break outer;
-          if (res.status === 503 || res.status === 404) break;
-        }
-        if (res.status !== 503) break;
-        await new Promise((r) => setTimeout(r, 1200));
-      }
+    for (const level of USE_SEARCH ? (voice ? [1, 0] : [2, 1, 0]) : [0]) {
+      res = await callGemini(apiKey, contents, level, voice);
+      if (res.ok) break;
     }
-    if (res.status === 429) return json(429, { reply: "Muitas mensagens em pouco tempo. Aguarde um instante e tente de novo." });
+
+    if (res.status === 429) {
+      return json(429, { reply: "Muitas mensagens em pouco tempo. Aguarde um instante e tente de novo." });
+    }
     if (!res.ok) {
       const raw = await res.text();
       console.error("Erro da API:", res.status, raw);
@@ -107,12 +113,14 @@ async function handler(event) {
       try { msg = JSON.parse(raw).error.message; } catch (_) {}
       return json(502, { reply: `A IA não respondeu (erro ${res.status}): ${String(msg).slice(0, 200)}` });
     }
+
     const data = await res.json();
     const cand = data.candidates?.[0];
     const reply = (cand?.content?.parts || []).map((p) => p.text || "").join("");
     const sources = (cand?.groundingMetadata?.groundingChunks || [])
       .filter((c) => c.web?.uri)
       .map((c) => ({ url: c.web.uri, title: c.web.title || "" }));
+
     return json(200, { reply: reply || "Não consegui gerar uma resposta.", sources });
   } catch (err) {
     console.error(err);
@@ -121,7 +129,11 @@ async function handler(event) {
 }
 
 module.exports = async (req, res) => {
-  const body = typeof req.body === "string" ? req.body : JSON.stringify(req.body || {});
-  const r = await handler({ httpMethod: req.method, body });
-  res.status(r.statusCode).setHeader("Content-Type", "application/json").send(r.body);
+  const event = {
+    httpMethod: req.method,
+    body: typeof req.body === "string" ? req.body : JSON.stringify(req.body || {}),
+  };
+  const out = await handler(event);
+  res.setHeader("Content-Type", "application/json");
+  res.status(out.statusCode).send(out.body);
 };
