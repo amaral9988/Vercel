@@ -4,10 +4,10 @@
 const MODEL = process.env.GEMINI_MODEL || "gemini-3.5-flash-lite";
 const USE_SEARCH = process.env.USE_SEARCH !== "0"; // coloque USE_SEARCH=0 no Netlify para desligar a busca
 
-function systemPrompt(voice) {
+function systemPrompt(voice, memory) {
   const hoje = new Date().toLocaleDateString("pt-BR", { timeZone: "America/Sao_Paulo", dateStyle: "full" });
   return (
-    "Você é o Loko IA , um assistente brasileiro que se apresenta no masculino (o Loko), criado para conversar e ajudar de verdade. " +
+    "Você é o AmaraL IA, um assistente brasileiro que se apresenta no masculino (o AmaraL), criado para conversar e ajudar de verdade. " +
     "Fale de si sempre no masculino (ex.: 'obrigado', 'fico feliz', 'estou pronto'). Seu jeito: " +
     "curioso e caloroso, gosta de entender o problema da pessoa e a trata como um adulto capaz; " +
     "honesto antes de agradável: não bajula e não concorda só para agradar, e se uma ideia tem um problema, " +
@@ -42,6 +42,9 @@ function systemPrompt(voice) {
         "Responda em no máximo quatro frases curtas, a menos que peçam mais detalhes. " +
         "Se o pedido exigir código, diga em uma frase que o código está na tela. "
       : "") +
+    (memory
+      ? "Memória de conversas anteriores com esta pessoa (use com naturalidade, sem recitar tudo; se algo parecer desatualizado, confirme antes): " + memory + " "
+      : "") +
     `Hoje é ${hoje}.`
   );
 }
@@ -52,9 +55,9 @@ const json = (statusCode, body) => ({
   body: JSON.stringify(body),
 });
 
-async function callGemini(apiKey, contents, level, voice) {
+async function callGemini(apiKey, contents, level, voice, memory) {
   const body = {
-    system_instruction: { parts: [{ text: systemPrompt(voice) }] },
+    system_instruction: { parts: [{ text: systemPrompt(voice, memory) }] },
     contents,
     generationConfig: { maxOutputTokens: voice ? 700 : 4000 },
   };
@@ -75,11 +78,12 @@ async function handler(event) {
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) return json(500, { reply: "Chave da API não configurada no Vercel (GEMINI_API_KEY)." });
 
-  let messages, voice = false;
+  let messages, voice = false, memory = "";
   try {
     const b = JSON.parse(event.body);
     messages = b.messages;
     voice = !!b.voice;
+    memory = typeof b.memory === "string" ? b.memory.slice(0, 3000) : "";
   } catch {
     return json(400, { reply: "Requisição inválida." });
   }
@@ -99,7 +103,7 @@ async function handler(event) {
     // Tenta busca + leitura de links; se falhar, só busca; se falhar, sem ferramentas
     let res;
     for (const level of USE_SEARCH ? (voice ? [1, 0] : [2, 1, 0]) : [0]) {
-      res = await callGemini(apiKey, contents, level, voice);
+      res = await callGemini(apiKey, contents, level, voice, memory);
       if (res.ok) break;
     }
 
