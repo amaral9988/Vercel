@@ -35,7 +35,7 @@ a,small{color:var(--muted);font-size:.9rem}
 <button class="btn" id="go" type="button">Ligar</button>
 <button class="btn" id="hang" type="button" hidden>Desligar</button>
 <a href="/">Voltar ao chat</a>
-<small>ligação v5 · memória + internet</small>
+<small>ligação v6 · memória + internet</small>
 <script type="module">
 const MODEL = "gemini-3.1-flash-live-preview";
 const VOICE = "Charon"; // voz masculina. Outras: Puck, Orus, Fenrir
@@ -84,7 +84,7 @@ async function salvarMemoria(feitas) {
   st.textContent = "Salvando memória…";
   try {
     const d = await memCall({ pin, action: "save", transcript: feitas.slice(-60) }, true);
-    st.textContent = d.ok ? "Memória salva. Toque em Ligar" : "Não consegui salvar a memória.";
+    st.textContent = d.ok ? "Memória salva. Toque em Ligar" : "Não consegui salvar a memória" + (d.error ? ": " + d.error : ".");
   } catch (_) { st.textContent = "Não consegui salvar a memória."; }
 }
 
@@ -195,7 +195,7 @@ async function start() {
     };
     setState("listening", "");
     const abertura = memoria
-      ? "Cumprimente com um olá curto. Se lembrar de algo pendente ou combinado da última conversa, mencione de leve; senão, pergunte como pode ajudar."
+      ? "Cumprimente com um olá curto. Se a memória tiver pendências ou combinados, mencione de forma natural a mais importante (no máximo duas) e pergunte como ficou; senão, pergunte como pode ajudar."
       : "Cumprimente com um olá curto e pergunte como pode ajudar.";
     try { session.sendRealtimeInput({ text: abertura }); } catch (_) {}
   } catch (e) {
