@@ -35,7 +35,7 @@ a,small{color:var(--muted);font-size:.9rem}
 <button class="btn" id="go" type="button">Ligar</button>
 <button class="btn" id="hang" type="button" hidden>Desligar</button>
 <a href="/">Voltar ao chat</a>
-<small>ligação v6 · memória + internet</small>
+<small>ligação v7 · memória + internet</small>
 <script type="module">
 const MODEL = "gemini-3.1-flash-live-preview";
 const VOICE = "Charon"; // voz masculina. Outras: Puck, Orus, Fenrir
@@ -54,7 +54,8 @@ const $ = (id) => document.getElementById(id);
 const orb = $("orb"), st = $("st"), tx = $("tx"), err = $("err"), go = $("go"), hang = $("hang");
 let GoogleGenAI, session = null, stream = null, inCtx = null, outCtx = null, node = null, wl = null;
 let active = false, nextT = 0, userTurn = false, silencioAte = 0, mudo = false;
-let convo = [], memoria = "";
+let convo = [], memoria = "", semBusca = false;
+try { semBusca = sessionStorage.getItem("semBusca") === "1"; } catch (_) {}
 const srcs = new Set();
 
 /* ---- memória (guardada na nuvem, protegida por senha) ---- */
@@ -157,7 +158,7 @@ async function start() {
       model: MODEL,
       config: {
         responseModalities: ["AUDIO"], systemInstruction: PROMPT + memTxt,
-        tools: [{ googleSearch: {} }], // internet em tempo real
+        ...(semBusca ? {} : { tools: [{ googleSearch: {} }] }), // internet em tempo real (desliga sozinha se a cota do Google acabar)
         speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: VOICE } } },
         inputAudioTranscription: {}, outputAudioTranscription: {},
         realtimeInputConfig: { automaticActivityDetection: { startOfSpeechSensitivity: "START_SENSITIVITY_LOW", endOfSpeechSensitivity: "END_SENSITIVITY_LOW", prefixPaddingMs: 300, silenceDurationMs: 1000 } },
@@ -165,7 +166,14 @@ async function start() {
       callbacks: {
         onmessage: onMsg,
         onerror: (e) => active && stop("Erro na conexão de voz: " + (e?.message || "desconhecido")),
-        onclose: (e) => active && stop("A ligação caiu" + (e?.reason ? ": " + e.reason : ".") + " Toque em Ligar para tentar de novo."),
+        onclose: (e) => {
+          if (!active) return;
+          if (!semBusca && /quota|exceeded|resource/i.test(e?.reason || "")) {
+            semBusca = true; try { sessionStorage.setItem("semBusca", "1"); } catch (_) {}
+            stop(); setTimeout(start, 300); return; // religa sem a busca
+          }
+          stop("A ligação caiu" + (e?.reason ? ": " + e.reason : ".") + " Toque em Ligar para tentar de novo.");
+        },
       },
     });
     const code = 'class P extends AudioWorkletProcessor{process(i){const c=i[0][0];if(c)this.port.postMessage(c.slice(0));return true;}}registerProcessor("p",P);';
@@ -193,7 +201,7 @@ async function start() {
       for (let i = 0; i < n; i++) { const s = Math.max(-1, Math.min(1, all[Math.floor(i * ratio)])); out[i] = s < 0 ? s * 32768 : s * 32767; }
       session.sendRealtimeInput({ audio: { data: toB64(out.buffer), mimeType: "audio/pcm;rate=16000" } });
     };
-    setState("listening", "");
+    setState("listening", semBusca ? "Sem busca na internet por enquanto (limite do Google)." : "");
     const abertura = memoria
       ? "Cumprimente com um olá curto. Se a memória tiver pendências ou combinados, mencione de forma natural a mais importante (no máximo duas) e pergunte como ficou; senão, pergunte como pode ajudar."
       : "Cumprimente com um olá curto e pergunte como pode ajudar.";
