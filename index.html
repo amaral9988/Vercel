@@ -105,6 +105,8 @@ textarea::placeholder{color:var(--muted)}
 .bar{position:absolute;top:6px;right:6px;display:flex;gap:6px}
 .tb{background:var(--surface);color:var(--text);border:1px solid var(--line);border-radius:8px;font:inherit;font-size:.78rem;padding:6px 10px;cursor:pointer;min-height:32px}
 .run{background:var(--accent);color:var(--accent-ink);border-color:var(--accent);font-weight:600}
+.memst{color:var(--muted);font-size:.85rem}
+#apagar{align-self:flex-start}
 .sm{display:none}
 @media (max-width:480px){.lg{display:none}.sm{display:inline}}
 .call{position:fixed;inset:0;z-index:20;background:radial-gradient(120% 80% at 50% 30%,#171a2b,#0b0d12);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:22px;padding:calc(24px + env(safe-area-inset-top,0px)) 24px calc(24px + env(safe-area-inset-bottom,0px));text-align:center}
@@ -148,6 +150,8 @@ textarea::placeholder{color:var(--muted)}
         <button class="chip" type="button">Escreva uma mensagem para um cliente</button>
         <button class="chip" type="button">Dê ideias para o meu negócio</button>
       </div>
+      <p class="memst" id="memst"></p>
+      <button class="ghost" id="apagar" type="button">Apagar memória</button>
     </div>
   </main>
 
@@ -269,7 +273,7 @@ async function getReply(){
   const res = await fetch(API_URL, {
     method:"POST",
     headers:{"Content-Type":"application/json"},
-    body:JSON.stringify({messages:history, voice: vozOn || speakNext || callOn})
+    body:JSON.stringify({messages:history, voice: vozOn || speakNext || callOn, memory: memoria})
   });
   let data = {};
   try{ data = await res.json(); }catch(_){}
@@ -506,7 +510,58 @@ orb.addEventListener("click", () => {
   if(orb.classList.contains("speaking")) stopAllSpeech();
   else if(listening && rec) rec.stop();
 });
-document.getElementById("novo").addEventListener("click", () => location.reload());
+let memoria = "", savedLen = 0;
+function readPin(){ try{ return localStorage.getItem("pin") || ""; }catch(_){ return ""; } }
+function getPin(){
+  let p = readPin();
+  let nao = false; try{ nao = sessionStorage.getItem("semsenha") === "1"; }catch(_){}
+  if(!p && !nao){
+    p = (prompt("Digite sua senha de acesso para ativar a memória (deixe vazio para continuar sem memória):") || "").trim();
+    try{ if(p) localStorage.setItem("pin", p); else sessionStorage.setItem("semsenha", "1"); }catch(_){}
+  }
+  return p;
+}
+async function memCall(body){
+  const r = await fetch("/api/memory", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify(body)});
+  const d = await r.json().catch(() => ({}));
+  if(r.status === 401){ try{ localStorage.removeItem("pin"); }catch(_){} }
+  return Object.assign({ok: r.ok}, d);
+}
+async function carregarMemoria(){
+  const el = document.getElementById("memst");
+  const pin = getPin();
+  if(!pin){ el.textContent = "Memória desativada."; return; }
+  try{
+    const d = await memCall({pin, action:"get"});
+    if(d.ok){ memoria = d.memory || ""; el.textContent = memoria ? "Memória ativa: ele lembra das conversas anteriores." : "Memória ativa (ainda vazia)."; }
+    else el.textContent = d.error || "Memória indisponível.";
+  }catch(_){ el.textContent = "Memória indisponível."; }
+}
+function transcricao(){ return history.map(m => ({role: m.role === "assistant" ? "model" : "user", text: m.content})); }
+async function salvar(){
+  const pin = readPin();
+  if(!pin || history.length < 2 || history.length === savedLen) return;
+  savedLen = history.length;
+  try{ const d = await memCall({pin, action:"save", transcript: transcricao()}); if(d.ok) memoria = d.memory || memoria; }catch(_){}
+}
+function beacon(){
+  const pin = readPin();
+  if(!pin || history.length < 2 || history.length === savedLen) return;
+  savedLen = history.length;
+  try{ navigator.sendBeacon("/api/memory", new Blob([JSON.stringify({pin, action:"save", transcript: transcricao()})], {type:"application/json"})); }catch(_){}
+}
+window.addEventListener("pagehide", beacon);
+document.addEventListener("visibilitychange", () => { if(document.visibilityState === "hidden") beacon(); });
+window.addEventListener("pageshow", e => { if(e.persisted) carregarMemoria(); });
+document.getElementById("novo").addEventListener("click", async () => { await salvar(); location.reload(); });
+document.getElementById("apagar").addEventListener("click", async () => {
+  if(!confirm("Apagar toda a memória dele?")) return;
+  const pin = getPin(); if(!pin) return;
+  const d = await memCall({pin, action:"clear"});
+  if(d.ok){ memoria = ""; history = []; savedLen = 0; }
+  document.getElementById("memst").textContent = d.ok ? "Memória apagada." : (d.error || "Não consegui apagar.");
+});
+carregarMemoria();
 </script>
 </body>
 </html>
